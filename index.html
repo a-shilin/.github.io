@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" id="searchInput" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+        body{
+            font-family: sans-serif;
+            font-size: 14px;
+        }
+        .suggestions{
+            list-style: none;
+            font-family: monospace;
+            margin: 3px;
+            padding: 0;
+        }
+        .suggestion{
+            cursor: pointer;
+        }
+        .suggestion:hover{
+            background: #ddd;
+        }
+        table{
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .results{
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div style="margin:20px 0;">
+        <div style="display:flex; flex-direction: row; gap: 10px; margin:0 0 20px;">
+        <b>Dataset:</b>
+        <select onchange="loadDataset(this.value)">
+            <option value="VST_norm_RNAseq_founder_islet_with_ANOVA.csv">Islet</option>
+            <option value="VST_norm_RNAseq_founder_adipose_with_ANOVA.csv">Adipose</option>
+            <option value="VST_norm_RNAseq_founder_skeletal_muscle_with_ANOVA.csv">Skeletal Muscle</option>
+            <option value="VST_norm_RNAseq_founder_liver_with_ANOVA.csv">Liver</option>
+            <option value="VST_norm_RNAseq_founder_heart_with_ANOVA_updated.csv">Heart</option>
+        </select>
+        <div class="datasetName">VST_norm_RNAseq_founder_islet_with_ANOVA.csv</div>
+    </div>
+    <div style="display: flex; flex-direction: row; gap:20px">
+        <div style="display:flex; flex-direction: column; gap:20px;">
+            <div style="display: flex; flex-direction: column; width:200px; gap:10px">
+                <b>Find top Genes by Condition</b>
+                <select class="conditionSelect" onchange="getGenesByEffect(this.value)" style="height:30px">
+                    <option value="">Select a Condition</option>
+                    <option value="strain">strain</option>
+                    <option value="sex">sex</option>
+                    <option value="strain_sex">strain by sex</option>
+                </select>
+            </div>
+            <div style="display: flex; flex-direction: column; width:200px; gap:10px">
+                <b>Search Mouse Gene</b>
+                <input class="geneInput" type="text" oninput="showSuggestions(this.value, genes)" style="height:24px"/>
+                <ul id="suggestions" class="suggestions"></ul>
+            </div>
+            
+        </div>
+        <div style="display:flex; flex-direction: row; gap:20px;">
+            <div class="effectResultTable" style="display: flex; flex-direction: column;"></div>
+            <div  style="display: flex; flex-direction: column;">
+                <b class="resultsFor" style="margin:0 0 10px 0"></b>
+                <div class="results"></div>
+            </div>
+            <div style="display: flex; flex-direction: column;">
+                <div class="plot"></div>
+                <div class="mResults"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const datasets = [
+            "VST_norm_RNAseq_founder_islet_with_ANOVA.csv",
+            "VST_norm_RNAseq_founder_adipose_with_ANOVA.csv",
+            "VST_norm_RNAseq_founder_skeletal_muscle_with_ANOVA.csv",
+            "VST_norm_RNAseq_founder_liver_with_ANOVA.csv",
+            "VST_norm_RNAseq_founder_heart_with_ANOVA_updated.csv",
+        ]
+        const effects = [
+            {value: "strain",       label:"strain"}, 
+            {value: "sex",          label:"sex"}, 
+            {value: "strain_sex",   label:"strain by sex"}
+        ];
+        let headers = [];
+        let headersB = [];
+        let rows = [];
+        let genes = [];
+        let sexes = new Set();
+
+        loadDataset('VST_norm_RNAseq_founder_islet_with_ANOVA.csv');
+
+        function loadDataset(dataset){
+            const conditionSelect = document.querySelector('.conditionSelect');
+            conditionSelect.value = "";
+            conditionSelect.dispatchEvent(new Event('change'));
+            const geneInput = document.querySelector('.geneInput');
+            geneInput.value = "";
+            geneInput.dispatchEvent(new Event('input'));
+            document.querySelector('.effectResultTable').innerHTML = '';
+            document.querySelector('.resultsFor').innerHTML = '';
+            document.querySelector('.results').innerHTML = '';
+            document.querySelector('.plot').innerHTML = '';
+            document.querySelector('.mResults').innerHTML = '';
+
+            document.querySelector('.datasetName').textContent = dataset;
+            fetchDataset(dataset);
+        }
+
+        function fetchDataset(dataset){
+            fetch(`data/${dataset}`)
+            .then(response => response.text())
+            .then(data => {
+
+                const lines = data.replace(/[\r]+/g, '').split('\n');
+                //lines.pop();
+                
+                const headers0 = lines[0].split(',')
+                const headers1 = lines[1].split(',')
+                const headers2 = lines[2].split(',')
+                const dataSplit = headers0.findIndex(value => value !== '');
+                headers = [];
+                headersB = [];
+                for(var i=0; i<headers0.length; i++){
+                    headers[i] = (i<dataSplit+1) ? headers2[i] : `${headers0[i]}`;
+                    headersB[i] = (i<dataSplit+1) ? headers2[i] : `${headers1[i]} | ${headers2[i]}`;
+                }
+                rows = lines.slice(3).map(line => {
+                    const columns = line.split(',');
+                    let row = {};
+                    row['mice'] = [];
+                    headers.forEach((header, i) => {
+                        if(i<dataSplit+1){
+                            row[header] = stringToNumber(columns[i]);
+                        }else{
+                            const data = {
+                                sample: headers0[i],
+                                strain: headers1[i],
+                                sex: headers2[i],
+                                value: stringToNumber(columns[i])
+                            }
+                            row['mice'].push(data);
+                        }
+                    });
+                    return row;
+                });
+                console.log('lines', dataSplit, {lines, headers0, headers1, headers2, headers, headersB, rows})
+
+                genes = rows.map(row=>row['Gene_symbol']);
+
+                console.log('genes', genes);
+
+                
+                
+            });
+        }
+        
+
+            function getGenesByEffect(effect){
+                // Get the container element
+                const container = document.querySelector('.effectResultTable');
+                container.innerHTML = '';
+
+                if(effect==='') return;
+
+                const result = findByEffect(effect, 10);
+                console.log('findByEffect', result);
+
+                if (!container) {
+                    console.error('Container element not found');
+                    return;
+                }
+                
+
+                // Create a table element
+                const table = document.createElement('table');
+                table.style.borderCollapse = 'collapse';
+                table.style.width = '100%';
+                table.style.margin = '20px 0';
+
+                // Create the table header
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                const headers = ['Gene_symbol', `P_adj_${effect}`, `f_${effect}`];
+                
+                headers.forEach(headerText => {
+                    const th = document.createElement('th');
+                    th.style.border = '1px solid #ddd';
+                    th.style.padding = '8px';
+                    th.style.backgroundColor = '#f2f2f2';
+                    th.style.textAlign = 'left';
+                    th.appendChild(document.createTextNode(headerText));
+                    headerRow.appendChild(th);
+                });
+
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                // Create the table body
+                const tbody = document.createElement('tbody');
+                result.forEach(item => {
+                    const row = document.createElement('tr');
+
+                    headers.forEach(header => {
+                        const cell = document.createElement('td');
+                        cell.style.border = '1px solid #ddd';
+                        cell.style.padding = '8px';
+                        if(header==='Gene_symbol') {
+                            cell.style.cursor = 'pointer';
+                            cell.onclick = () => showData(item[header]);
+                        }
+                        cell.appendChild(document.createTextNode(item[header]));
+                        row.appendChild(cell);
+                    });
+
+                    tbody.appendChild(row);
+                });
+
+                table.appendChild(tbody);
+
+                // Clear the container and append the new table
+                container.innerHTML = '';
+                container.appendChild(table);
+            }
+
+            function findByEffect(effect, N){
+                // Map the effect to the corresponding adjusted p-value key
+                const effectKeyMap = {
+                    'strain': `P_adj_${effect}`,
+                    'sex': `P_adj_${effect}`,
+                    'strain_sex': `P_adj_${effect}`
+                };
+                
+                const valueKey = effectKeyMap[effect];
+
+                if (!valueKey) {
+                    throw new Error('Invalid effect specified. Valid effects are: strain, sex, strain_sex.');
+                }
+
+                // Sort the data based on the adjusted p-value for the specified effect
+                const sortedData = rows.sort((a, b) => a[valueKey] - b[valueKey]);
+
+                // Return the top N rows
+                return sortedData.slice(0, N);
+            }
+
+            function groupMice(mice) {
+                const grouped = {};
+                sexes = new Set();
+                const rows = [];
+
+                console.log('mice', mice);
+
+                mice.forEach(mouse => {
+                    if (!grouped[mouse.strain]) {
+                        grouped[mouse.strain] = { male: [], female: [] };
+                    }
+                    grouped[mouse.strain][mouse.sex].push(mouse.value);
+                    sexes.add(mouse.sex);
+                });
+
+                //console.log(Object.entries(grouped));
+                
+                for(const [strain, value] of Object.entries(grouped)){
+                    sexes.forEach(sex => {
+                        console.log(strain, value)
+                        const dataPoints = value[sex].sort();
+                        const n = dataPoints.length;
+                        const mean = dataPoints.reduce((sum, val) => sum + val, 0) / n;
+                        const median = (dataPoints[Math.floor((n - 1) / 2)] + dataPoints[Math.ceil((n - 1) / 2)]) / 2;
+                        const min = dataPoints[0];
+                        const max = dataPoints[n - 1];
+                        const range = max - min;
+                        const q1 = dataPoints[Math.floor((n - 1) / 4)];
+                        const q3 = dataPoints[Math.floor((3 * (n - 1)) / 4)];
+                        const iqr = q3 - q1;
+                        const variance = dataPoints.reduce((sum, val) => sum + (val - mean) ** 2, 0) / n;
+                        const stdDev = Math.sqrt(variance);
+                        strain[`stats_${sex}`] = {mean, median, min, max, range, q1, q3, iqr, variance, stdDev}
+                        rows.push({strain, sex, mean, median, min, max, range, q1, q3, iqr, variance, stdDev})
+                    })
+                    
+                }
+
+                console.log('mice rows', rows);
+
+                return {grouped, rows};
+            }
+
+            function stringToNumber(str) {
+                // Check if the string is a valid number
+                if (!isNaN(str)) {
+                    return parseFloat(str);
+                } else if (!isNaN(parseFloat(str))) {
+                    // Convert scientific notation to number
+                    return str;//parseFloat(str);
+                } else {
+                    // Return NaN or handle invalid input accordingly
+                    return str;
+                }
+            }
+
+            function showSuggestions(inputValue, dataArray) {
+                const suggestionsList = document.getElementById("suggestions");
+                suggestionsList.innerHTML = '';
+
+                if(inputValue.trim()==='') return;
+
+                const filteredArray = dataArray.filter(item => {
+                    if(!item) return;
+                    return item.toLowerCase().includes(inputValue.toLowerCase())
+                });
+
+                filteredArray.forEach(item => {
+                    const li = document.createElement("li");
+                    li.classList.add('suggestion');
+                    li.textContent = item;
+                    li.dataset.value = item;
+                    li.onclick = () => showData(item)
+                    suggestionsList.appendChild(li);
+                });
+            }
+
+            function showData(value){
+                const results = rows.find(row => row['Gene_symbol']===value);
+
+                const element = document.querySelector('.results');
+                let outputHTML = "<ul class='suggestions'>";
+                for (const key in results) {
+                    if (results.hasOwnProperty(key) && !Array.isArray(results[key])) {
+                        outputHTML += `<li style='white-space:nowrap'><strong>${headersB[headers.indexOf(key)]}:</strong> ${results[key]}</li>`;
+                    }
+                }
+                outputHTML += "</ul>";
+
+                element.innerHTML = outputHTML;
+                document.querySelector('.resultsFor').textContent = value;
+
+                const mResults = groupMice(results.mice);
+                console.log("groupMice", mResults);
+                displayMiceTable(mResults.grouped);
+                renderBoxPlot(mResults.rows);
+            }
+
+            function displayMiceTable(groupedData) {
+                const container = document.querySelector('.mResults');
+                if (!container) {
+                    console.error('Container element not found');
+                    return;
+                }
+
+                const table = document.createElement('table');
+                table.style.borderCollapse = 'collapse';
+                table.style.width = '100%';
+                table.style.margin = '20px 0';
+
+                const thead = document.createElement('thead');
+                
+                // Top header row for strains
+                const strainHeaderRow = document.createElement('tr');
+                Object.keys(groupedData).forEach(strain => {
+                    const strainHeaderCell = document.createElement('th');
+                    strainHeaderCell.style.border = '1px solid #ddd';
+                    strainHeaderCell.style.padding = '8px';
+                    strainHeaderCell.style.backgroundColor = '#f2f2f2';
+                    strainHeaderCell.style.textAlign = 'center';
+                    strainHeaderCell.colSpan = 2; // Span 2 columns: one for male and one for female
+                    strainHeaderCell.appendChild(document.createTextNode(strain));
+                    strainHeaderRow.appendChild(strainHeaderCell);
+                });
+                thead.appendChild(strainHeaderRow);
+
+                // Second header row for sex
+                const sexHeaderRow = document.createElement('tr');
+                Object.keys(groupedData).forEach(strain => {
+                    ['female', 'male'].forEach(sex => {
+                        const sexHeaderCell = document.createElement('th');
+                        sexHeaderCell.style.border = '1px solid #ddd';
+                        sexHeaderCell.style.padding = '8px';
+                        sexHeaderCell.style.backgroundColor = '#f2f2f2';
+                        sexHeaderCell.style.textAlign = 'center';
+                        sexHeaderCell.appendChild(document.createTextNode(sex.charAt(0).toUpperCase()));
+                        sexHeaderRow.appendChild(sexHeaderCell);
+                    });
+                });
+                thead.appendChild(sexHeaderRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                
+                // Determine the maximum number of rows needed
+                const maxRows = Math.max(...Object.values(groupedData).flatMap(data => [data.female.length, data.male.length]));
+                
+                for (let i = 0; i < maxRows; i++) {
+                    const row = document.createElement('tr');
+                    Object.keys(groupedData).forEach(strain => {
+                        const femaleValue = groupedData[strain].female[i] !== undefined ? groupedData[strain].female[i] : '';
+                        const femaleCell = document.createElement('td');
+                        femaleCell.style.border = '1px solid #ddd';
+                        femaleCell.style.padding = '8px';
+                        femaleCell.appendChild(document.createTextNode(femaleValue));
+                        row.appendChild(femaleCell);
+
+                        const maleValue = groupedData[strain].male[i] !== undefined ? groupedData[strain].male[i] : '';
+                        const maleCell = document.createElement('td');
+                        maleCell.style.border = '1px solid #ddd';
+                        maleCell.style.padding = '8px';
+                        maleCell.appendChild(document.createTextNode(maleValue));
+                        row.appendChild(maleCell);
+                    });
+                    tbody.appendChild(row);
+                }
+
+                table.appendChild(tbody);
+                container.innerHTML = '';
+                container.appendChild(table);
+            }
+
+            function clamp(num, lower, upper) {
+                return Math.min(Math.max(num, lower), upper);
+            }
+
+            function renderBoxPlot(data) {
+                const margin = { top: 20, right: 20, bottom: 40, left: 40 };
+                const width = 500 - margin.left - margin.right;
+                const height = 250 - margin.top - margin.bottom;
+
+                const svg = d3.select('.plot').html("").append('svg')
+                    .attr('width', width + margin.left + margin.right)
+                    .attr('height', height + margin.top + margin.bottom)
+                .append('g')
+                    .attr('transform', `translate(${margin.left},${margin.top})`);
+
+                // Extract strains and unique strains
+                const strains = Array.from(new Set(data.map(d => d.strain)));
+
+                // X scale for strains
+                const xScale = d3.scaleBand()
+                    .domain(strains)
+                    .range([0, width])
+                    .padding(0.2);
+
+                // Y scale
+                const yMin = d3.min(data, d => d.min);
+                const yMax = d3.max(data, d => d.max);
+                const yScale = d3.scaleLinear()
+                    .domain([yMin, yMax])
+                    .range([height, 0])
+                    .nice();
+
+                // Axis generators
+                const xAxis = d3.axisBottom(xScale);
+                const yAxis = d3.axisLeft(yScale);
+
+                // Draw axes
+                svg.append('g')
+                    .attr('transform', `translate(0, ${height})`)
+                    .call(xAxis);
+
+                svg.append('g')
+                    .call(yAxis);
+
+                // Function to draw a box plot for a given data row
+                const drawBoxPlot = (d, index) => {
+                    const center = xScale(d.strain) + xScale.bandwidth() / 4 + (index * xScale.bandwidth() / 2);
+                    const boxWidth = xScale.bandwidth() / 2 - 10;
+
+                    // Box
+                    svg.append('rect')
+                        .attr('x', center - boxWidth / 2)
+                        .attr('y', yScale(d.q3))
+                        .attr('width', boxWidth)
+                        .attr('height', clamp(yScale(d.q1) - yScale(d.q3), 0, Infinity))
+                        .attr('fill', d.sex === 'male' ? 'blue' : 'pink');
+
+                    // Median line
+                    svg.append('line')
+                        .attr('x1', center - boxWidth / 2)
+                        .attr('x2', center + boxWidth / 2)
+                        .attr('y1', yScale(d.median))
+                        .attr('y2', yScale(d.median))
+                        .attr('stroke', 'black');
+
+                    // Min line
+                    svg.append('line')
+                        .attr('x1', center)
+                        .attr('x2', center)
+                        .attr('y1', yScale(d.min))
+                        .attr('y2', yScale(d.q1))
+                        .attr('stroke', 'black');
+
+                    // Max line
+                    svg.append('line')
+                        .attr('x1', center)
+                        .attr('x2', center)
+                        .attr('y1', yScale(d.q3))
+                        .attr('y2', yScale(d.max))
+                        .attr('stroke', 'black');
+
+                    // Min whisker
+                    svg.append('line')
+                        .attr('x1', center - boxWidth / 4)
+                        .attr('x2', center + boxWidth / 4)
+                        .attr('y1', yScale(d.min))
+                        .attr('y2', yScale(d.min))
+                        .attr('stroke', 'black');
+
+                    // Max whisker
+                    svg.append('line')
+                        .attr('x1', center - boxWidth / 4)
+                        .attr('x2', center + boxWidth / 4)
+                        .attr('y1', yScale(d.max))
+                        .attr('y2', yScale(d.max))
+                        .attr('stroke', 'black');
+                };
+
+                // Draw the box plots
+                data.forEach((d, i) => drawBoxPlot(d, i % 2));
+            }
+
+    </script>
+</body>
+</html>
